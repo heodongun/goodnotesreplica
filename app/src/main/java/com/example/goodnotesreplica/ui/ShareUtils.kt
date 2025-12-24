@@ -1,0 +1,31 @@
+package com.example.goodnotesreplica.ui
+
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import androidx.core.content.FileProvider
+import java.io.File
+
+fun shareFile(context: Context, file: File, mimeType: String, title: String) {
+    val uri = file.toShareUri(context)
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = mimeType
+        putExtra(Intent.EXTRA_STREAM, uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    context.startActivity(Intent.createChooser(intent, title))
+}
+
+fun openFile(context: Context, file: File, mimeType: String) {
+    val uri = file.toShareUri(context)
+    val intent = Intent(Intent.ACTION_VIEW).apply {
+        setDataAndType(uri, mimeType)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    context.startActivity(intent)
+}
+
+private fun File.toShareUri(context: Context): Uri {
+    val authority = "${context.packageName}.fileprovider"
+    return FileProvider.getUriForFile(context, authority, this)
+}
