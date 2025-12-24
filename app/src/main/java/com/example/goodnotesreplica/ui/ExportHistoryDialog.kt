@@ -31,6 +31,12 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+/**
+ * 내보내기 기록을 표시하는 다이얼로그입니다.
+ *
+ * @param records 표시할 내보내기 기록 목록
+ * @param onDismiss 다이얼로그 닫기 콜백
+ */
 @Composable
 fun ExportHistoryDialog(
     records: List<ExportRecord>,

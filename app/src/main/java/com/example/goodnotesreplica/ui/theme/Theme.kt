@@ -39,6 +39,14 @@ private val LightColorScheme = lightColorScheme(
     outlineVariant = Color(0xFFD8D0C2),
 )
 
+/**
+ * 앱의 메인 테마입니다.
+ * 라이트/다크 모드에 따라 색상 스키마를 설정합니다.
+ *
+ * @param darkTheme 다크 테마 사용 여부
+ * @param dynamicColor 동적 색상 사용 여부 (현재 미사용)
+ * @param content 테마가 적용될 컨텐츠
+ */
 @Composable
 fun GoodnotesreplicaTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),

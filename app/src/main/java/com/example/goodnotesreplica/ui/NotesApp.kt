@@ -20,14 +20,26 @@ import com.example.goodnotesreplica.data.NotesRepository
 import com.example.goodnotesreplica.data.Page
 import com.example.goodnotesreplica.data.PaperStyle
 import java.io.File
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 
+/**
+ * 앱의 화면 상태를 정의합니다.
+ */
 sealed interface Screen {
+    /** 홈 화면 (노트북 목록) */
     data object Home : Screen
+    /** 노트북 상세 화면 (페이지 목록) */
     data class NotebookDetail(val notebookId: String) : Screen
+    /** 편집기 화면 (그리기 및 편집) */
     data class Editor(val notebookId: String, val pageId: String) : Screen
 }
 
+/**
+ * 앱의 최상위 컴포저블입니다.
+ * 내비게이션 및 전체 상태 관리를 담당합니다.
+ */
 @Composable
 fun NotesApp() {
     val context = LocalContext.current
@@ -47,9 +59,13 @@ fun NotesApp() {
     var activePage by remember { mutableStateOf<Page?>(null) }
 
     LaunchedEffect(Unit) {
-        notebooks = repository.listNotebooks()
-        folders = repository.listFolders()
-        visibleNotebooks = notebooks
+        coroutineScope {
+            val notebooksDeferred = async { repository.listNotebooks() }
+            val foldersDeferred = async { repository.listFolders() }
+            notebooks = notebooksDeferred.await()
+            folders = foldersDeferred.await()
+            visibleNotebooks = notebooks
+        }
     }
 
     LaunchedEffect(searchQuery, selectedFolderId, notebooks) {
@@ -119,8 +135,12 @@ fun NotesApp() {
     fun deleteFolder(folder: Folder) {
         scope.launch {
             repository.deleteFolder(folder.id)
-            folders = repository.listFolders()
-            notebooks = repository.listNotebooks()
+            coroutineScope {
+                val foldersDeferred = async { repository.listFolders() }
+                val notebooksDeferred = async { repository.listNotebooks() }
+                folders = foldersDeferred.await()
+                notebooks = notebooksDeferred.await()
+            }
             syncActiveNotebook(notebooks)
             if (selectedFolderId == folder.id) {
                 selectedFolderId = null
@@ -228,8 +248,11 @@ fun NotesApp() {
             if (!isExpanded) {
                 screen = Screen.Editor(notebook.id, activePage?.id ?: newPages.first().id)
             }
-            notebooks = repository.listNotebooks()
-            syncActiveNotebook(notebooks)
+            coroutineScope {
+                val notebooksDeferred = async { repository.listNotebooks() }
+                notebooks = notebooksDeferred.await()
+                syncActiveNotebook(notebooks)
+            }
         }
     }
 

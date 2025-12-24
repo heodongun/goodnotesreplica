@@ -8,6 +8,9 @@ import androidx.compose.ui.unit.sp
 
 private val AppFont = FontFamily.Serif
 
+/**
+ * 앱 전반에 사용되는 타이포그래피 스타일 정의입니다.
+ */
 val Typography = Typography(
     displaySmall = TextStyle(
         fontFamily = AppFont,

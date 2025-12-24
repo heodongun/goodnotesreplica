@@ -11,6 +11,8 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -40,21 +42,56 @@ import java.io.File
 import java.util.UUID
 import kotlin.math.hypot
 
+/**
+ * 캔버스에서 발생하는 사용자 액션을 정의하는 인터페이스입니다.
+ * 그리기, 지우기, 선택, 변형 등의 작업을 포함합니다.
+ */
 sealed interface CanvasAction {
+    /** 스트로크 추가 액션 */
     data class AddStroke(val stroke: NoteStroke) : CanvasAction
-    data class EraseStrokes(val strokes: List<NoteStroke>) : CanvasAction
+    /** 특정 위치 지우기 액션 */
+    data class EraseAt(val position: StrokePoint) : CanvasAction
+    /** 선택 영역 변경 액션 */
     data class SelectionChanged(val selection: SelectionIds) : CanvasAction
+    /** 선택 해제 액션 */
     data object ClearSelection : CanvasAction
+    /** 선택 이동 시작 액션 */
     data object MoveSelectionStart : CanvasAction
+    /** 선택 이동 액션 */
     data class MoveSelection(val delta: StrokePoint) : CanvasAction
+    /** 선택 이동 종료 액션 */
     data object MoveSelectionEnd : CanvasAction
+    /** 변형 시작 액션 */
     data class TransformStart(val handle: TransformHandle) : CanvasAction
+    /** 변형 업데이트 액션 */
     data class TransformUpdate(val handle: TransformHandle, val position: StrokePoint) : CanvasAction
+    /** 변형 종료 액션 */
     data object TransformEnd : CanvasAction
+    /** 텍스트 탭 액션 */
     data class TextTap(val position: StrokePoint) : CanvasAction
+    /** 텍스트 편집 액션 */
     data class TextEdit(val textId: String) : CanvasAction
 }
 
+/**
+ * 사용자가 그림을 그리고, 텍스트와 이미지를 조작할 수 있는 메인 캔버스 컴포저블입니다.
+ *
+ * @param strokes 그려진 스트로크 리스트
+ * @param textItems 텍스트 아이템 리스트
+ * @param imageItems 이미지 아이템 리스트
+ * @param tool 현재 선택된 도구
+ * @param color 현재 선택된 색상
+ * @param widthDp 현재 선택된 펜 두께 (dp)
+ * @param paperStyle 배경 종이 스타일
+ * @param backgroundPath 배경 이미지 경로 (있는 경우)
+ * @param selectionBounds 선택된 영역의 경계
+ * @param transformTarget 변형 대상 (텍스트 또는 이미지)
+ * @param snapGuides 스냅 가이드 정보
+ * @param scale 줌 스케일
+ * @param viewportOffset 뷰포트 오프셋
+ * @param modifier 수정자
+ * @param onAction 캔버스 액션 콜백
+ */
 @Composable
 fun DrawingCanvas(
     strokes: List<NoteStroke>,
@@ -68,6 +105,8 @@ fun DrawingCanvas(
     selectionBounds: NormalizedRect?,
     transformTarget: TransformTarget?,
     snapGuides: SnapGuides,
+    scale: Float,
+    viewportOffset: Offset,
     modifier: Modifier = Modifier,
     onAction: (CanvasAction) -> Unit,
 ) {
@@ -77,6 +116,7 @@ fun DrawingCanvas(
     val handleRadiusPx = with(density) { 18.dp.toPx() }
     val rotateHandleOffsetPx = with(density) { 28.dp.toPx() }
 
+    // 배경 이미지를 비트맵으로 로드하고 캐싱합니다.
     val backgroundBitmap = remember(backgroundPath) {
         backgroundPath?.let { path ->
             val file = File(path)
@@ -84,6 +124,7 @@ fun DrawingCanvas(
         }
     }
 
+    // 이미지 아이템들의 비트맵을 로드하고 캐싱합니다.
     val imageBitmaps = remember(imageItems) {
         imageItems.associate { item ->
             item.id to runCatching {
@@ -96,12 +137,12 @@ fun DrawingCanvas(
     Canvas(
         modifier = modifier
             .fillMaxSize()
-            .pointerInput(tool, strokes, textItems, imageItems, selectionBounds, transformTarget) {
+            .pointerInput(tool, strokes, textItems, imageItems, selectionBounds, transformTarget, scale, viewportOffset) {
                 val canvasSize = Size(size.width.toFloat(), size.height.toFloat())
                 when (tool) {
                     ToolType.TEXT -> {
                         detectTapGestures { offset ->
-                            val normalized = offset.toNormalized(canvasSize)
+                            val normalized = offset.toNormalized(canvasSize, scale, viewportOffset)
                             val hit = findTextHit(textItems, normalized)
                             if (hit != null) {
                                 onAction(CanvasAction.TextEdit(hit))
@@ -117,9 +158,10 @@ fun DrawingCanvas(
                         var lastPosition: Offset? = null
                         detectDragGestures(
                             onDragStart = { offset ->
-                                val normalized = offset.toNormalized(canvasSize)
+                                val normalized = offset.toNormalized(canvasSize, scale, viewportOffset)
+                                val contentPosition = offset.toContent(scale, viewportOffset)
                                 val handle = transformTarget?.let {
-                                    findHandleHit(it, offset, canvasSize, handleRadiusPx, rotateHandleOffsetPx)
+                                    findHandleHit(it, contentPosition, canvasSize, handleRadiusPx, rotateHandleOffsetPx)
                                 }
                                 if (handle != null) {
                                     transforming = true
@@ -127,7 +169,7 @@ fun DrawingCanvas(
                                     onAction(CanvasAction.TransformStart(handle))
                                 } else if (selectionBounds?.contains(normalized) == true) {
                                     moving = true
-                                    lastPosition = offset
+                                    lastPosition = contentPosition
                                     onAction(CanvasAction.MoveSelectionStart)
                                 } else {
                                     moving = false
@@ -137,16 +179,17 @@ fun DrawingCanvas(
                                 }
                             },
                             onDrag = { change, _ ->
-                                val normalized = change.position.toNormalized(canvasSize)
+                                val normalized = change.position.toNormalized(canvasSize, scale, viewportOffset)
+                                val contentPosition = change.position.toContent(scale, viewportOffset)
                                 if (transforming && activeHandle != null) {
                                     onAction(CanvasAction.TransformUpdate(activeHandle!!, normalized))
                                 } else if (moving) {
-                                    val last = lastPosition ?: change.position
+                                    val last = lastPosition ?: contentPosition
                                     val delta = Offset(
-                                        x = change.position.x - last.x,
-                                        y = change.position.y - last.y,
+                                        x = contentPosition.x - last.x,
+                                        y = contentPosition.y - last.y,
                                     )
-                                    lastPosition = change.position
+                                    lastPosition = contentPosition
                                     onAction(CanvasAction.MoveSelection(delta.toNormalizedDelta(canvasSize)))
                                 } else {
                                     lassoPoints.add(normalized)
@@ -196,23 +239,17 @@ fun DrawingCanvas(
                         detectDragGestures(
                             onDragStart = { offset ->
                                 currentPoints.clear()
-                                val normalized = offset.toNormalized(canvasSize)
+                                val normalized = offset.toNormalized(canvasSize, scale, viewportOffset)
                                 currentPoints.add(normalized)
                                 if (tool == ToolType.ERASER) {
-                                    val removed = findStrokesAt(strokes, offset, canvasSize, widthDp.dp.toPx())
-                                    if (removed.isNotEmpty()) {
-                                        onAction(CanvasAction.EraseStrokes(removed))
-                                    }
+                                    onAction(CanvasAction.EraseAt(normalized))
                                 }
                             },
                             onDrag = { change, _ ->
-                                val normalized = change.position.toNormalized(canvasSize)
+                                val normalized = change.position.toNormalized(canvasSize, scale, viewportOffset)
                                 currentPoints.add(normalized)
                                 if (tool == ToolType.ERASER) {
-                                    val removed = findStrokesAt(strokes, change.position, canvasSize, widthDp.dp.toPx())
-                                    if (removed.isNotEmpty()) {
-                                        onAction(CanvasAction.EraseStrokes(removed))
-                                    }
+                                    onAction(CanvasAction.EraseAt(normalized))
                                 }
                             },
                             onDragEnd = {
@@ -236,7 +273,16 @@ fun DrawingCanvas(
     ) {
         drawBackground(backgroundBitmap, paperStyle)
         drawImages(imageItems, imageBitmaps)
-        drawStrokes(strokes)
+        
+        // 스트로크 그리기를 최적화합니다.
+        // 현재 사이즈에 맞는 Path를 생성하여 그립니다.
+        // Note: 성능을 위해 Path 객체 캐싱(remember)을 고려할 수 있지만,
+        // 캔버스 사이즈 의존성 때문에 매 프레임 다시 계산될 수 있어 여기서는 직접 변환하여 그립니다.
+        // 대량의 스트로크가 있는 경우 뷰포트 컬링(Viewport Culling)이 필요할 수 있습니다.
+        strokes.forEach { stroke ->
+             drawNormalizedStroke(stroke)
+        }
+        
         drawTextItems(textItems, density.density)
 
         if (currentPoints.isNotEmpty() && tool != ToolType.ERASER && tool != ToolType.LASSO) {
@@ -267,6 +313,12 @@ fun DrawingCanvas(
     }
 }
 
+/**
+ * 페이지 썸네일을 그리는 컴포저블입니다.
+ *
+ * @param page 표시할 페이지 데이터
+ * @param modifier 수정자
+ */
 @Composable
 fun PageThumbnail(
     page: Page,
@@ -291,7 +343,9 @@ fun PageThumbnail(
     Canvas(modifier = modifier) {
         drawBackground(backgroundBitmap, page.paperStyle)
         drawImages(page.imageItems, imageBitmaps)
-        drawStrokes(page.strokes)
+        page.strokes.forEach { stroke ->
+            drawNormalizedStroke(stroke)
+        }
         drawTextItems(page.textItems, density.density)
     }
 }
@@ -372,12 +426,6 @@ private fun DrawScope.drawPaper(style: PaperStyle) {
                 x += spacing
             }
         }
-    }
-}
-
-private fun DrawScope.drawStrokes(strokes: List<NoteStroke>) {
-    strokes.forEach { stroke ->
-        drawNormalizedStroke(stroke)
     }
 }
 
@@ -608,10 +656,11 @@ private fun handlePositionsPx(
     )
 }
 
-private fun Offset.toNormalized(size: Size): StrokePoint {
+private fun Offset.toNormalized(size: Size, scale: Float, offset: Offset): StrokePoint {
     if (size.width == 0f || size.height == 0f) return StrokePoint(0f, 0f)
-    val x = (x / size.width).coerceIn(0f, 1f)
-    val y = (y / size.height).coerceIn(0f, 1f)
+    val content = toContent(scale, offset)
+    val x = (content.x / size.width).coerceIn(0f, 1f)
+    val y = (content.y / size.height).coerceIn(0f, 1f)
     return StrokePoint(x, y)
 }
 
@@ -624,19 +673,9 @@ private fun StrokePoint.toOffset(size: Size): Offset {
     return Offset(x * size.width, y * size.height)
 }
 
-private fun findStrokesAt(
-    strokes: List<NoteStroke>,
-    position: Offset,
-    size: Size,
-    radiusPx: Float,
-): List<NoteStroke> {
-    val radius = radiusPx * 1.4f
-    return strokes.filter { stroke ->
-        stroke.points.any { point ->
-            val offset = point.toOffset(size)
-            hypot(offset.x - position.x, offset.y - position.y) <= radius
-        }
-    }
+private fun Offset.toContent(scale: Float, offset: Offset): Offset {
+    if (scale == 0f) return Offset.Zero
+    return Offset((x - offset.x) / scale, (y - offset.y) / scale)
 }
 
 private fun selectWithinLasso(

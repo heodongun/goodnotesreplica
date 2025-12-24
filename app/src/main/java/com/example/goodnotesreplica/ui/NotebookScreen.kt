@@ -52,10 +52,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.shape.CircleShape
 import com.example.goodnotesreplica.data.ExportType
 import com.example.goodnotesreplica.data.ExportRecord
 import com.example.goodnotesreplica.data.Notebook
@@ -64,6 +66,26 @@ import com.example.goodnotesreplica.data.PaperStyle
 import java.io.File
 import kotlinx.coroutines.launch
 
+/**
+ * 노트북 상세 화면 컴포저블입니다.
+ * 페이지 목록을 표시하고, 새 페이지 추가 및 PDF 가져오기 등의 기능을 제공합니다.
+ *
+ * @param notebook 표시할 노트북 정보
+ * @param pages 노트북에 포함된 페이지 목록
+ * @param activePage 현재 활성화된 페이지 (확장 모드일 때)
+ * @param isExpanded 화면 확장 여부 (태블릿 등)
+ * @param onBack 뒤로 가기 콜백
+ * @param onCreatePage 새 페이지 생성 콜백
+ * @param onOpenPage 페이지 열기 콜백
+ * @param onSavePage 페이지 저장 콜백
+ * @param onRenameNotebook 노트북 이름 변경 콜백
+ * @param onImportPdf PDF 가져오기 콜백
+ * @param onImportImage 이미지 가져오기 콜백
+ * @param onExportPage 페이지 내보내기 콜백
+ * @param onExportToUri URI로 페이지 내보내기 콜백
+ * @param onLoadExportHistory 내보내기 기록 로드 콜백
+ * @param onRerenderPdf PDF 다시 렌더링 콜백
+ */
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
 fun NotebookScreen(
@@ -409,30 +431,30 @@ private fun PageCard(
     val borderColor = if (isActive) {
         MaterialTheme.colorScheme.primary
     } else {
-        MaterialTheme.colorScheme.outlineVariant
+        Color.Transparent
     }
+    val elevation = if (isActive) 4.dp else 1.dp
     val ratio = if (page.aspectRatio > 0f) page.aspectRatio else 0.72f
-    Card(
-        onClick = onClick,
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface,
-        ),
-        shape = RoundedCornerShape(20.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, borderColor),
+
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.padding(bottom = 8.dp)
     ) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            Text(
-                text = "Page ${page.index}",
-                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Spacer(modifier = Modifier.height(8.dp))
+        Card(
+            onClick = onClick,
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surface,
+            ),
+            shape = RoundedCornerShape(8.dp),
+            border = androidx.compose.foundation.BorderStroke(2.dp, borderColor),
+            elevation = CardDefaults.cardElevation(defaultElevation = elevation),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(ratio)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .background(Color.White) // 실제 종이 느낌
             ) {
                 PageThumbnail(
                     page = page,
@@ -440,39 +462,42 @@ private fun PageCard(
                 )
             }
         }
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(
+            text = "페이지 ${page.index}",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
 @Composable
 private fun EmptyEditor(modifier: Modifier = Modifier) {
     Box(
-        modifier = modifier,
+        modifier = modifier.background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
         contentAlignment = Alignment.Center,
     ) {
-        Card(
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surface,
-            ),
-            shape = RoundedCornerShape(28.dp),
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
             modifier = Modifier.padding(32.dp),
         ) {
-            Column(
-                modifier = Modifier.padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(56.dp, 72.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant),
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                Text(
-                    text = "페이지를 선택하거나 새로 추가하세요.",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            Icon(
+                imageVector = Icons.Default.Edit,
+                contentDescription = null,
+                modifier = Modifier
+                    .size(64.dp)
+                    .background(MaterialTheme.colorScheme.surface, CircleShape)
+                    .padding(16.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
+            Spacer(modifier = Modifier.height(24.dp))
+            Text(
+                text = "페이지를 선택하거나\n새로 추가하여 시작하세요.",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            )
         }
     }
 }

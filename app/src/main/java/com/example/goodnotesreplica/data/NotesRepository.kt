@@ -21,16 +21,31 @@ import java.io.File
 import java.util.UUID
 import kotlin.math.min
 
+/**
+ * 노트북, 페이지, 내보내기 기록을 관리하는 파일 시스템 기반의 저장소입니다.
+ *
+ * @property context 파일 및 콘텐츠 접근을 위한 애플리케이션 컨텍스트
+ */
 class NotesRepository(private val context: Context) {
+    /** 모든 노트북 폴더를 포함하는 루트 디렉토리 */
     private val rootDir = File(context.filesDir, "notebooks").apply {
         if (!exists()) {
             mkdirs()
         }
     }
+    /** 폴더 메타데이터를 저장하는 영구 라이브러리 인덱스 파일 */
     private val libraryFile = File(rootDir, "library.json")
+    /** 내보내기 기록 로그 파일 */
     private val exportHistoryFile = File(context.filesDir, "exports/history.json")
+    /** IO 작업을 위한 디스패처 */
+    private val ioDispatcher = Dispatchers.IO
+    /** CPU 바운드 렌더링 및 레이아웃 작업을 위한 디스패처 */
+    private val cpuDispatcher = Dispatchers.Default
 
-    suspend fun listNotebooks(): List<Notebook> = withContext(Dispatchers.IO) {
+    /**
+     * 마지막 업데이트 시간순으로 정렬된 노트북 목록을 반환합니다.
+     */
+    suspend fun listNotebooks(): List<Notebook> = withContext(ioDispatcher) {
         rootDir.listFiles()
             ?.filter { it.isDirectory }
             ?.mapNotNull { readNotebook(File(it, "notebook.json")) }
@@ -38,11 +53,17 @@ class NotesRepository(private val context: Context) {
             ?: emptyList()
     }
 
-    suspend fun listFolders(): List<Folder> = withContext(Dispatchers.IO) {
+    /**
+     * 이름순으로 정렬된 모든 폴더 목록을 반환합니다.
+     */
+    suspend fun listFolders(): List<Folder> = withContext(ioDispatcher) {
         readFolders().sortedBy { it.name.lowercase() }
     }
 
-    suspend fun createFolder(name: String): Folder = withContext(Dispatchers.IO) {
+    /**
+     * 주어진 이름으로 새 폴더를 생성합니다.
+     */
+    suspend fun createFolder(name: String): Folder = withContext(ioDispatcher) {
         val trimmed = name.trim().ifEmpty { "Untitled Folder" }
         val now = System.currentTimeMillis()
         val folder = Folder(
@@ -56,7 +77,10 @@ class NotesRepository(private val context: Context) {
         folder
     }
 
-    suspend fun renameFolder(folder: Folder, name: String): Folder = withContext(Dispatchers.IO) {
+    /**
+     * 폴더 이름과 타임스탬프를 업데이트합니다.
+     */
+    suspend fun renameFolder(folder: Folder, name: String): Folder = withContext(ioDispatcher) {
         val trimmed = name.trim().ifEmpty { folder.name }
         val updated = folder.copy(name = trimmed, updatedAt = System.currentTimeMillis())
         val folders = readFolders().map { if (it.id == folder.id) updated else it }
@@ -64,7 +88,10 @@ class NotesRepository(private val context: Context) {
         updated
     }
 
-    suspend fun deleteFolder(folderId: String) = withContext(Dispatchers.IO) {
+    /**
+     * 폴더를 삭제하고 해당 폴더를 참조하던 노트북의 연결을 해제합니다.
+     */
+    suspend fun deleteFolder(folderId: String) = withContext(ioDispatcher) {
         val updatedFolders = readFolders().filterNot { it.id == folderId }
         writeFolders(updatedFolders)
         val notebooks = listNotebooks().map { notebook ->
@@ -73,7 +100,10 @@ class NotesRepository(private val context: Context) {
         notebooks.forEach { writeNotebook(File(rootDir, "${it.id}/notebook.json"), it) }
     }
 
-    suspend fun createNotebook(title: String, folderId: String? = null): Notebook = withContext(Dispatchers.IO) {
+    /**
+     * 선택적 폴더 아래에 새 노트북을 생성합니다.
+     */
+    suspend fun createNotebook(title: String, folderId: String? = null): Notebook = withContext(ioDispatcher) {
         val id = UUID.randomUUID().toString()
         val now = System.currentTimeMillis()
         val notebook = Notebook(
@@ -93,7 +123,10 @@ class NotesRepository(private val context: Context) {
         notebook
     }
 
-    suspend fun renameNotebook(notebook: Notebook, newTitle: String): Notebook = withContext(Dispatchers.IO) {
+    /**
+     * 노트북의 이름을 변경하고 타임스탬프를 업데이트합니다.
+     */
+    suspend fun renameNotebook(notebook: Notebook, newTitle: String): Notebook = withContext(ioDispatcher) {
         val updated = notebook.copy(
             title = newTitle.trim().ifEmpty { notebook.title },
             updatedAt = System.currentTimeMillis(),
@@ -102,7 +135,10 @@ class NotesRepository(private val context: Context) {
         updated
     }
 
-    suspend fun updateNotebookFolder(notebook: Notebook, folderId: String?): Notebook = withContext(Dispatchers.IO) {
+    /**
+     * 노트북을 다른 폴더로 이동합니다 (또는 폴더 없음으로 설정).
+     */
+    suspend fun updateNotebookFolder(notebook: Notebook, folderId: String?): Notebook = withContext(ioDispatcher) {
         val updated = notebook.copy(
             folderId = folderId,
             updatedAt = System.currentTimeMillis(),
@@ -111,7 +147,10 @@ class NotesRepository(private val context: Context) {
         updated
     }
 
-    suspend fun updateNotebookTags(notebook: Notebook, tags: List<String>): Notebook = withContext(Dispatchers.IO) {
+    /**
+     * 노트북의 태그 목록을 업데이트합니다.
+     */
+    suspend fun updateNotebookTags(notebook: Notebook, tags: List<String>): Notebook = withContext(ioDispatcher) {
         val updated = notebook.copy(
             tags = normalizeTags(tags),
             updatedAt = System.currentTimeMillis(),
@@ -120,12 +159,18 @@ class NotesRepository(private val context: Context) {
         updated
     }
 
-    suspend fun deleteNotebook(notebookId: String) = withContext(Dispatchers.IO) {
+    /**
+     * 노트북과 해당 디스크 폴더를 삭제합니다.
+     */
+    suspend fun deleteNotebook(notebookId: String) = withContext(ioDispatcher) {
         val notebookDir = File(rootDir, notebookId)
         notebookDir.deleteRecursively()
     }
 
-    suspend fun listPages(notebookId: String): List<Page> = withContext(Dispatchers.IO) {
+    /**
+     * 노트북의 모든 페이지를 반환합니다.
+     */
+    suspend fun listPages(notebookId: String): List<Page> = withContext(ioDispatcher) {
         val pagesDir = File(File(rootDir, notebookId), "pages")
         if (!pagesDir.exists()) return@withContext emptyList()
         pagesDir.listFiles()
@@ -135,16 +180,22 @@ class NotesRepository(private val context: Context) {
             ?: emptyList()
     }
 
-    suspend fun loadPage(notebookId: String, pageId: String): Page? = withContext(Dispatchers.IO) {
+    /**
+     * ID로 단일 페이지를 로드합니다.
+     */
+    suspend fun loadPage(notebookId: String, pageId: String): Page? = withContext(ioDispatcher) {
         readPage(pageFile(notebookId, pageId))
     }
 
+    /**
+     * 노트북에 새 빈 페이지를 생성합니다.
+     */
     suspend fun createPage(
         notebookId: String,
         paperStyle: PaperStyle,
         backgroundPath: String? = null,
         aspectRatio: Float = DEFAULT_PAGE_RATIO,
-    ): Page = withContext(Dispatchers.IO) {
+    ): Page = withContext(ioDispatcher) {
         val pages = listPages(notebookId)
         val nextIndex = (pages.maxOfOrNull { it.index } ?: 0) + 1
         val page = Page(
@@ -165,7 +216,10 @@ class NotesRepository(private val context: Context) {
         page
     }
 
-    suspend fun importImage(notebookId: String, uri: Uri): String? = withContext(Dispatchers.IO) {
+    /**
+     * 이미지를 노트북 에셋으로 복사하고 파일 경로를 반환합니다.
+     */
+    suspend fun importImage(notebookId: String, uri: Uri): String? = withContext(ioDispatcher) {
         val assetsDir = File(File(rootDir, notebookId), "assets").apply { mkdirs() }
         val extension = guessExtension(uri)
         val file = File(assetsDir, "img_${System.currentTimeMillis()}_${UUID.randomUUID()}.$extension")
@@ -178,7 +232,10 @@ class NotesRepository(private val context: Context) {
         file.absolutePath
     }
 
-    suspend fun importPdfAsPages(notebookId: String, uri: Uri): List<Page> = withContext(Dispatchers.IO) {
+    /**
+     * PDF를 배경 페이지로 가져와 노트북에 추가합니다.
+     */
+    suspend fun importPdfAsPages(notebookId: String, uri: Uri): List<Page> = withContext(ioDispatcher) {
         val assetsDir = File(File(rootDir, notebookId), "assets").apply { mkdirs() }
         val pdfFile = File(assetsDir, "source_${System.currentTimeMillis()}_${UUID.randomUUID()}.pdf")
         val pdfCopied = copyUriToFile(uri, pdfFile)
@@ -229,14 +286,22 @@ class NotesRepository(private val context: Context) {
         pages
     }
 
-    suspend fun savePage(notebookId: String, page: Page) = withContext(Dispatchers.IO) {
+    /**
+     * 최신 페이지 내용과 노트북 타임스탬프를 저장합니다.
+     */
+    suspend fun savePage(notebookId: String, page: Page) = withContext(ioDispatcher) {
         writePage(pageFile(notebookId, page.id), page)
         updateNotebookTimestamp(notebookId)
     }
 
-    suspend fun exportPageAsPng(page: Page, notebook: Notebook): File? = withContext(Dispatchers.IO) {
+    /**
+     * 페이지를 앱 저장소에 PNG 파일로 내보냅니다.
+     */
+    suspend fun exportPageAsPng(page: Page, notebook: Notebook): File? = withContext(ioDispatcher) {
         val exportDir = File(context.filesDir, "exports").apply { mkdirs() }
-        val bitmap = renderPageBitmap(page, EXPORT_WIDTH)
+        val bitmap = withContext(cpuDispatcher) {
+            renderPageBitmap(page, EXPORT_WIDTH)
+        }
         val file = File(exportDir, "page_${page.index}_${System.currentTimeMillis()}.png")
         file.outputStream().use { output ->
             bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
@@ -253,9 +318,14 @@ class NotesRepository(private val context: Context) {
         file
     }
 
-    suspend fun exportPageAsPdf(page: Page, notebook: Notebook): File? = withContext(Dispatchers.IO) {
+    /**
+     * 페이지를 앱 저장소에 PDF 파일로 내보냅니다.
+     */
+    suspend fun exportPageAsPdf(page: Page, notebook: Notebook): File? = withContext(ioDispatcher) {
         val exportDir = File(context.filesDir, "exports").apply { mkdirs() }
-        val bitmap = renderPageBitmap(page, EXPORT_WIDTH)
+        val bitmap = withContext(cpuDispatcher) {
+            renderPageBitmap(page, EXPORT_WIDTH)
+        }
         val document = PdfDocument()
         val pageInfo = PdfDocument.PageInfo.Builder(bitmap.width, bitmap.height, 1).create()
         val pdfPage = document.startPage(pageInfo)
@@ -278,22 +348,29 @@ class NotesRepository(private val context: Context) {
         file
     }
 
+    /**
+     * 호출자가 제공한 문서 URI로 페이지를 내보냅니다.
+     */
     suspend fun exportPageToUri(
         page: Page,
         notebook: Notebook,
         type: ExportType,
         uri: Uri,
-    ): Boolean = withContext(Dispatchers.IO) {
+    ): Boolean = withContext(ioDispatcher) {
         val resolver = context.contentResolver
         val output = resolver.openOutputStream(uri) ?: return@withContext false
         output.use { stream ->
             when (type) {
                 ExportType.PNG -> {
-                    val bitmap = renderPageBitmap(page, EXPORT_WIDTH)
+                    val bitmap = withContext(cpuDispatcher) {
+                        renderPageBitmap(page, EXPORT_WIDTH)
+                    }
                     bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
                 }
                 ExportType.PDF -> {
-                    val bitmap = renderPageBitmap(page, EXPORT_WIDTH)
+                    val bitmap = withContext(cpuDispatcher) {
+                        renderPageBitmap(page, EXPORT_WIDTH)
+                    }
                     val document = PdfDocument()
                     val pageInfo = PdfDocument.PageInfo.Builder(bitmap.width, bitmap.height, 1).create()
                     val pdfPage = document.startPage(pageInfo)
@@ -316,17 +393,25 @@ class NotesRepository(private val context: Context) {
         true
     }
 
-    suspend fun listExportHistory(): List<ExportRecord> = withContext(Dispatchers.IO) {
+    /**
+     * 최신순으로 정렬된 내보내기 기록을 반환합니다.
+     */
+    suspend fun listExportHistory(): List<ExportRecord> = withContext(ioDispatcher) {
         readExportHistory().sortedByDescending { it.createdAt }
     }
 
-    suspend fun rerenderPdfPage(page: Page): Page? = withContext(Dispatchers.IO) {
+    /**
+     * PDF 기반 페이지 배경을 다시 렌더링하고 업데이트된 페이지를 반환합니다.
+     */
+    suspend fun rerenderPdfPage(page: Page): Page? = withContext(ioDispatcher) {
         val source = page.sourcePdfPath ?: return@withContext null
         val pageIndex = page.sourcePdfPageIndex ?: return@withContext null
         val pdfFile = File(source)
         if (!pdfFile.exists()) return@withContext null
         val outputDir = pdfFile.parentFile ?: return@withContext null
-        val rendered = renderPdfPageToPng(pdfFile, pageIndex, outputDir) ?: return@withContext null
+        val rendered = withContext(cpuDispatcher) {
+            renderPdfPageToPng(pdfFile, pageIndex, outputDir)
+        } ?: return@withContext null
         page.copy(
             backgroundPath = rendered.path,
             aspectRatio = rendered.aspectRatio,
@@ -334,7 +419,10 @@ class NotesRepository(private val context: Context) {
         )
     }
 
-    suspend fun searchNotebooks(query: String): List<Notebook> = withContext(Dispatchers.IO) {
+    /**
+     * 제목, 태그 또는 페이지 텍스트 내용으로 노트북을 검색합니다.
+     */
+    suspend fun searchNotebooks(query: String): List<Notebook> = withContext(ioDispatcher) {
         val term = query.trim().lowercase()
         if (term.isEmpty()) return@withContext listNotebooks()
         val notebooks = listNotebooks()

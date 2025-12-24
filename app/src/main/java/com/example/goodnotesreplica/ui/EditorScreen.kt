@@ -67,14 +67,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Brush as ComposeBrush
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.ui.input.pointer.pointerInput
 import com.example.goodnotesreplica.data.ExportType
 import com.example.goodnotesreplica.data.ExportRecord
 import com.example.goodnotesreplica.data.ImageItem
@@ -92,9 +98,24 @@ import android.graphics.BitmapFactory
 import android.graphics.Paint
 import android.graphics.Typeface
 import kotlin.math.abs
+import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 
+/**
+ * 노트 편집을 위한 메인 화면 컴포저블입니다.
+ * 툴바, 캔버스, 내보내기 메뉴 등을 포함합니다.
+ *
+ * @param notebook 편집 중인 노트북 정보
+ * @param page 편집 중인 페이지 정보
+ * @param onBack 뒤로 가기 콜백
+ * @param onSavePage 페이지 저장 콜백
+ * @param onImportImage 이미지 가져오기 콜백
+ * @param onExportPage 페이지 파일 내보내기 콜백
+ * @param onExportToUri URI로 페이지 내보내기 콜백
+ * @param onLoadExportHistory 내보내기 기록 로드 콜백
+ * @param onRerenderPdf PDF 다시 렌더링 콜백
+ */
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
 fun EditorScreen(
@@ -300,6 +321,16 @@ fun EditorScreen(
 
 }
 
+/**
+ * 캔버스와 툴바를 포함하는 실제 편집 패널입니다.
+ *
+ * @param page 편집할 페이지
+ * @param onSavePage 페이지 저장 콜백
+ * @param onRequestImagePick 이미지 선택 요청 콜백
+ * @param insertImagePath 삽입할 이미지 경로 (선택된 경우)
+ * @param onConsumeImagePath 이미지 경로 소비(처리 완료) 콜백
+ * @param modifier 수정자
+ */
 @Composable
 fun EditorPanel(
     page: Page,
@@ -316,6 +347,8 @@ fun EditorPanel(
     var paperStyle by remember(page.id) { mutableStateOf(page.paperStyle) }
     var backgroundPath by remember(page.id) { mutableStateOf(page.backgroundPath) }
     var canvasSize by remember(page.id) { mutableStateOf(IntSize.Zero) }
+    var zoomScale by remember(page.id) { mutableStateOf(1f) }
+    var zoomOffset by remember(page.id) { mutableStateOf(Offset.Zero) }
 
     val strokes = remember(page.id) { mutableStateListOf<Stroke>().apply { addAll(page.strokes) } }
     val textItems = remember(page.id) { mutableStateListOf<TextItem>().apply { addAll(page.textItems) } }
@@ -351,6 +384,8 @@ fun EditorPanel(
         moveSnapshot = null
         transformState = null
         snapGuides = SnapGuides()
+        zoomScale = 1f
+        zoomOffset = Offset.Zero
     }
 
     LaunchedEffect(currentTool) {
@@ -388,6 +423,27 @@ fun EditorPanel(
         onConsumeImagePath()
     }
 
+    val zoomGestureModifier = Modifier.pointerInput(canvasSize) {
+        awaitEachGesture {
+            var workingScale = zoomScale
+            var workingOffset = zoomOffset
+            while (true) {
+                val event = awaitPointerEvent()
+                val pressed = event.changes.filter { it.pressed }
+                if (pressed.size >= 2) {
+                    val zoomChange = event.calculateZoom()
+                    val panChange = event.calculatePan()
+                    workingScale = (workingScale * zoomChange).coerceIn(1f, 3f)
+                    workingOffset = clampZoomOffset(workingOffset + panChange, workingScale, canvasSize)
+                    zoomScale = workingScale
+                    zoomOffset = workingOffset
+                    event.changes.forEach { it.consume() }
+                }
+                if (pressed.isEmpty()) break
+            }
+        }
+    }
+
     LaunchedEffect(canvasSize, page.id) {
         if (canvasSize.width == 0 || canvasSize.height == 0) return@LaunchedEffect
         var updated = false
@@ -412,6 +468,7 @@ fun EditorPanel(
             selectionState = SelectionState()
             persistPage(page, strokes, textItems, imageItems, paperStyle, backgroundPath, onSavePage)
         }
+        zoomOffset = clampZoomOffset(zoomOffset, zoomScale, canvasSize)
     }
 
     fun updateSelection(selection: SelectionIds) {
@@ -455,111 +512,96 @@ fun EditorPanel(
     )
 
     Column(modifier = modifier) {
+        // 상단 툴바 패널
         Surface(
-            shape = RoundedCornerShape(28.dp),
-            tonalElevation = 1.dp,
+            shape = RoundedCornerShape(16.dp),
+            tonalElevation = 2.dp,
+            shadowElevation = 4.dp,
             color = MaterialTheme.colorScheme.surface,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 16.dp),
         ) {
-            Column(modifier = Modifier.padding(12.dp)) {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // 도구 선택 행
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    ToolToggle(
-                        label = "펜",
-                        icon = Icons.Default.Brush,
-                        selected = currentTool == ToolType.PEN,
-                        onClick = { currentTool = ToolType.PEN },
-                    )
-                    ToolToggle(
-                        label = "형광펜",
-                        icon = Icons.Default.AutoFixHigh,
-                        selected = currentTool == ToolType.HIGHLIGHTER,
-                        onClick = { currentTool = ToolType.HIGHLIGHTER },
-                    )
-                    ToolToggle(
-                        label = "지우개",
-                        icon = Icons.Default.ContentCut,
-                        selected = currentTool == ToolType.ERASER,
-                        onClick = { currentTool = ToolType.ERASER },
-                    )
-                    ToolToggle(
-                        label = "라쏘",
-                        icon = Icons.Default.Gesture,
-                        selected = currentTool == ToolType.LASSO,
-                        onClick = { currentTool = ToolType.LASSO },
-                    )
-                    ToolToggle(
-                        label = "텍스트",
-                        icon = Icons.Default.TextFields,
-                        selected = currentTool == ToolType.TEXT,
-                        onClick = { currentTool = ToolType.TEXT },
-                    )
-                    ToolToggle(
-                        label = "이미지",
-                        icon = Icons.Default.Image,
-                        selected = currentTool == ToolType.IMAGE,
-                        onClick = {
-                            currentTool = ToolType.IMAGE
-                            onRequestImagePick()
-                        },
-                    )
-                    Spacer(modifier = Modifier.size(6.dp))
-                    IconButton(onClick = { if (undoStack.isNotEmpty()) undo() }) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.Undo,
-                            contentDescription = null,
-                            tint = if (undoStack.isNotEmpty()) {
-                                MaterialTheme.colorScheme.onSurface
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier
+                            .weight(1f, fill = false)
+                            .horizontalScroll(rememberScrollState())
+                    ) {
+                        ToolToggle(
+                            icon = Icons.Default.Brush,
+                            selected = currentTool == ToolType.PEN,
+                            onClick = { currentTool = ToolType.PEN },
+                        )
+                        ToolToggle(
+                            icon = Icons.Default.AutoFixHigh,
+                            selected = currentTool == ToolType.HIGHLIGHTER,
+                            onClick = { currentTool = ToolType.HIGHLIGHTER },
+                        )
+                        ToolToggle(
+                            icon = Icons.Default.ContentCut,
+                            selected = currentTool == ToolType.ERASER,
+                            onClick = { currentTool = ToolType.ERASER },
+                        )
+                        ToolToggle(
+                            icon = Icons.Default.Gesture,
+                            selected = currentTool == ToolType.LASSO,
+                            onClick = { currentTool = ToolType.LASSO },
+                        )
+                        ToolToggle(
+                            icon = Icons.Default.TextFields,
+                            selected = currentTool == ToolType.TEXT,
+                            onClick = { currentTool = ToolType.TEXT },
+                        )
+                        ToolToggle(
+                            icon = Icons.Default.Image,
+                            selected = currentTool == ToolType.IMAGE,
+                            onClick = {
+                                currentTool = ToolType.IMAGE
+                                onRequestImagePick()
                             },
                         )
                     }
-                    IconButton(onClick = { if (redoStack.isNotEmpty()) redo() }) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.Redo,
-                            contentDescription = null,
-                            tint = if (redoStack.isNotEmpty()) {
-                                MaterialTheme.colorScheme.onSurface
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                            },
-                        )
+                    
+                    // 실행 취소/재실행 그룹
+                    Row(horizontalArrangement = Arrangement.spacedBy(0.dp)) {
+                        IconButton(onClick = { if (undoStack.isNotEmpty()) undo() }) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.Undo,
+                                contentDescription = "실행 취소",
+                                tint = if (undoStack.isNotEmpty()) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
+                            )
+                        }
+                        IconButton(onClick = { if (redoStack.isNotEmpty()) redo() }) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.Redo,
+                                contentDescription = "재실행",
+                                tint = if (redoStack.isNotEmpty()) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
+                            )
+                        }
                     }
-                    PaperStyleMenu(
-                        paperStyle = paperStyle,
-                        onPaperStyleChange = {
-                            recordChange(
-                                strokes = strokes,
-                                textItems = textItems,
-                                imageItems = imageItems,
-                                paperStyle = paperStyle,
-                                backgroundPath = backgroundPath,
-                                undoStack = undoStack,
-                                redoStack = redoStack,
-                            ) {
-                                paperStyle = it
-                            }
-                            persistPage(page, strokes, textItems, imageItems, paperStyle, backgroundPath, onSavePage)
-                        },
-                    )
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
-
+                // 세부 설정 행 (색상, 두께, 스타일)
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
+                    modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         palette.forEach { color ->
                             ColorChip(
                                 color = color,
@@ -567,23 +609,55 @@ fun EditorPanel(
                                 onClick = { selectedColor = color },
                             )
                         }
+                        
+                        Box(
+                            modifier = Modifier
+                                .height(24.dp)
+                                .width(1.dp)
+                                .background(MaterialTheme.colorScheme.outlineVariant)
+                        )
+
+                        PaperStyleMenu(
+                            paperStyle = paperStyle,
+                            onPaperStyleChange = {
+                                recordChange(
+                                    strokes = strokes,
+                                    textItems = textItems,
+                                    imageItems = imageItems,
+                                    paperStyle = paperStyle,
+                                    backgroundPath = backgroundPath,
+                                    undoStack = undoStack,
+                                    redoStack = redoStack,
+                                ) {
+                                    paperStyle = it
+                                }
+                                persistPage(page, strokes, textItems, imageItems, paperStyle, backgroundPath, onSavePage)
+                            },
+                        )
                     }
-                    Spacer(modifier = Modifier.size(6.dp))
-                    Text(
-                        text = "굵기",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Slider(
-                        value = strokeWidth,
-                        onValueChange = { strokeWidth = it },
-                        valueRange = 1.5f..12f,
-                        modifier = Modifier.width(140.dp),
-                    )
+
+                    // 두께 슬라이더 (컴팩트하게)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.width(120.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(if (strokeWidth < 5f) 4.dp else 8.dp)
+                                .background(selectedColor, CircleShape)
+                        )
+                        Slider(
+                            value = strokeWidth,
+                            onValueChange = { strokeWidth = it },
+                            valueRange = 1.5f..12f,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
                 }
 
+                // 선택 도구 메뉴 (선택된 경우에만 표시)
                 if (!selectionState.isEmpty) {
-                    Spacer(modifier = Modifier.height(8.dp))
                     SelectionBar(
                         selectionState = selectionState,
                         onCopy = {
@@ -637,15 +711,13 @@ fun EditorPanel(
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
-
         Card(
             modifier = Modifier.fillMaxSize(),
-            shape = RoundedCornerShape(28.dp),
+            shape = RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp, bottomStart = 16.dp, bottomEnd = 16.dp),
             colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surface,
+                containerColor = Color.White, // 캔버스 배경은 흰색 고정 (종이 느낌)
             ),
-            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         ) {
             DrawingCanvas(
                 strokes = strokes,
@@ -659,10 +731,19 @@ fun EditorPanel(
                 selectionBounds = selectionState.bounds,
                 transformTarget = selectionState.transformTarget,
                 snapGuides = snapGuides,
+                scale = zoomScale,
+                viewportOffset = zoomOffset,
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(12.dp)
-                    .onSizeChanged { canvasSize = it },
+                    .onSizeChanged { canvasSize = it }
+                    .then(zoomGestureModifier)
+                    .graphicsLayer {
+                        scaleX = zoomScale
+                        scaleY = zoomScale
+                        translationX = zoomOffset.x
+                        translationY = zoomOffset.y
+                    },
                 onAction = { action ->
                     when (action) {
                         is CanvasAction.AddStroke -> {
@@ -686,21 +767,24 @@ fun EditorPanel(
                             snapGuides = SnapGuides()
                             persistPage(page, strokes, textItems, imageItems, paperStyle, backgroundPath, onSavePage)
                         }
-                        is CanvasAction.EraseStrokes -> {
-                            recordChange(
+                        is CanvasAction.EraseAt -> {
+                            if (canvasSize.width == 0 || canvasSize.height == 0) return@DrawingCanvas
+                            val radiusPx = with(density) { strokeWidth.dp.toPx() } * 1.4f
+                            val before = snapshot(strokes, textItems, imageItems, paperStyle, backgroundPath)
+                            val changed = eraseStrokesAt(
+                                position = action.position,
                                 strokes = strokes,
-                                textItems = textItems,
-                                imageItems = imageItems,
-                                paperStyle = paperStyle,
-                                backgroundPath = backgroundPath,
-                                undoStack = undoStack,
-                                redoStack = redoStack,
-                            ) {
-                                strokes.removeAll(action.strokes.toSet())
+                                radiusPx = radiusPx,
+                                canvasSize = canvasSize,
+                            )
+                            if (changed) {
+                                val after = snapshot(strokes, textItems, imageItems, paperStyle, backgroundPath)
+                                undoStack.add(EditAction(before, after))
+                                redoStack.clear()
+                                selectionState = SelectionState()
+                                snapGuides = SnapGuides()
+                                persistPage(page, strokes, textItems, imageItems, paperStyle, backgroundPath, onSavePage)
                             }
-                            selectionState = SelectionState()
-                            snapGuides = SnapGuides()
-                            persistPage(page, strokes, textItems, imageItems, paperStyle, backgroundPath, onSavePage)
                         }
                         is CanvasAction.SelectionChanged -> {
                             updateSelection(action.selection)
@@ -1497,6 +1581,107 @@ private fun computeTextHeightNormalized(
     return (heightPx / canvasSize.height.toFloat()).coerceAtMost(1f)
 }
 
+private fun clampZoomOffset(offset: Offset, scale: Float, canvasSize: IntSize): Offset {
+    if (canvasSize.width == 0 || canvasSize.height == 0) return Offset.Zero
+    val maxX = (canvasSize.width * (scale - 1f)) / 2f
+    val maxY = (canvasSize.height * (scale - 1f)) / 2f
+    return Offset(
+        x = offset.x.coerceIn(-maxX, maxX),
+        y = offset.y.coerceIn(-maxY, maxY),
+    )
+}
+
+private fun eraseStrokesAt(
+    position: StrokePoint,
+    strokes: MutableList<Stroke>,
+    radiusPx: Float,
+    canvasSize: IntSize,
+): Boolean {
+    if (strokes.isEmpty()) return false
+    if (canvasSize.width == 0 || canvasSize.height == 0) return false
+    val before = strokes.toList()
+    val eraser = Offset(
+        x = position.x * canvasSize.width,
+        y = position.y * canvasSize.height,
+    )
+    val updated = buildList {
+        before.forEach { stroke ->
+            addAll(eraseStroke(stroke, eraser, radiusPx, canvasSize))
+        }
+    }
+    if (updated == before) return false
+    strokes.clear()
+    strokes.addAll(updated)
+    return true
+}
+
+private fun eraseStroke(
+    stroke: Stroke,
+    eraser: Offset,
+    radiusPx: Float,
+    canvasSize: IntSize,
+): List<Stroke> {
+    val points = stroke.points
+    if (points.isEmpty()) return emptyList()
+    val keep = BooleanArray(points.size) { true }
+    var changed = false
+    val offsets = points.map { point -> point.toOffsetPx(canvasSize) }
+    offsets.forEachIndexed { index, point ->
+        if (distance(point, eraser) <= radiusPx) {
+            keep[index] = false
+            changed = true
+        }
+    }
+    for (i in 0 until offsets.lastIndex) {
+        if (distanceToSegment(eraser, offsets[i], offsets[i + 1]) <= radiusPx) {
+            keep[i] = false
+            keep[i + 1] = false
+            changed = true
+        }
+    }
+    if (!changed) return listOf(stroke)
+
+    val segments = mutableListOf<List<StrokePoint>>()
+    var current = mutableListOf<StrokePoint>()
+    points.forEachIndexed { index, point ->
+        if (keep[index]) {
+            current.add(point)
+        } else if (current.size >= 2) {
+            segments.add(current)
+            current = mutableListOf()
+        } else {
+            current.clear()
+        }
+    }
+    if (current.size >= 2) {
+        segments.add(current)
+    }
+    return segments.map { segment ->
+        stroke.copy(
+            id = UUID.randomUUID().toString(),
+            points = segment,
+        )
+    }
+}
+
+private fun StrokePoint.toOffsetPx(canvasSize: IntSize): Offset {
+    return Offset(x * canvasSize.width, y * canvasSize.height)
+}
+
+private fun distance(a: Offset, b: Offset): Float {
+    return hypot(a.x - b.x, a.y - b.y)
+}
+
+private fun distanceToSegment(p: Offset, a: Offset, b: Offset): Float {
+    val dx = b.x - a.x
+    val dy = b.y - a.y
+    if (dx == 0f && dy == 0f) return distance(p, a)
+    val t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy)
+    val clamped = t.coerceIn(0f, 1f)
+    val proj = Offset(a.x + clamped * dx, a.y + clamped * dy)
+    return distance(p, proj)
+}
+
 private fun applyDeltaToSelection(
     delta: StrokePoint,
     selection: SelectionIds,
@@ -1613,34 +1798,25 @@ private fun createImageItem(path: String): ImageItem {
 
 @Composable
 private fun ToolToggle(
-    label: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     selected: Boolean,
     onClick: () -> Unit,
 ) {
+    val containerColor = if (selected) MaterialTheme.colorScheme.primary else Color.Transparent
+    val contentColor = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+
     Surface(
         onClick = onClick,
-        shape = RoundedCornerShape(16.dp),
-        color = if (selected) {
-            MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
-        } else {
-            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
-        },
+        shape = CircleShape, // 완전 원형
+        color = containerColor,
+        modifier = Modifier.size(40.dp) // 고정 크기
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
+        Box(contentAlignment = Alignment.Center) {
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelLarge,
-                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                tint = contentColor,
+                modifier = Modifier.size(20.dp)
             )
         }
     }

@@ -12,15 +12,18 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -62,6 +65,24 @@ import androidx.compose.ui.unit.sp
 import com.example.goodnotesreplica.data.Folder
 import com.example.goodnotesreplica.data.Notebook
 
+/**
+ * 노트북 목록과 폴더를 표시하는 홈 화면 컴포저블입니다.
+ *
+ * @param notebooks 표시할 노트북 목록
+ * @param folders 표시할 폴더 목록
+ * @param selectedFolderId 현재 선택된 폴더 ID (전체인 경우 null)
+ * @param searchQuery 현재 검색어
+ * @param onSearchQueryChange 검색어 변경 콜백
+ * @param onSelectFolder 폴더 선택 콜백
+ * @param onCreateNotebook 새 노트북 생성 콜백
+ * @param onCreateFolder 새 폴더 생성 콜백
+ * @param onRenameFolder 폴더 이름 변경 콜백
+ * @param onDeleteFolder 폴더 삭제 콜백
+ * @param onOpenNotebook 노트북 열기 콜백
+ * @param onDeleteNotebook 노트북 삭제 콜백
+ * @param onMoveNotebook 노트북 이동 콜백
+ * @param onEditTags 노트북 태그 편집 콜백
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun HomeScreen(
@@ -453,26 +474,29 @@ private fun FolderChip(
     selected: Boolean,
     onClick: () -> Unit,
 ) {
+    val backgroundColor = if (selected) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        MaterialTheme.colorScheme.surfaceVariant
+    }
+    val contentColor = if (selected) {
+        MaterialTheme.colorScheme.onPrimary
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    }
+
     Surface(
         onClick = onClick,
-        shape = RoundedCornerShape(16.dp),
-        color = if (selected) {
-            MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
-        } else {
-            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
-        },
+        shape = CircleShape,
+        color = backgroundColor,
+        shadowElevation = if (selected) 2.dp else 0.dp,
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelLarge,
-                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+        Text(
+            text = label,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Medium),
+            color = contentColor,
+        )
     }
 }
 
@@ -487,50 +511,79 @@ private fun NotebookCard(
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     val baseColor = Color(notebook.coverColor)
-    val gradient = Brush.linearGradient(
-        listOf(
-            baseColor.copy(alpha = 0.22f),
-            baseColor.copy(alpha = 0.08f),
-            MaterialTheme.colorScheme.surface,
-        )
+    
+    // 노트북 커버 그라데이션 및 질감 효과
+    val coverBrush = Brush.linearGradient(
+        colors = listOf(
+            baseColor,
+            baseColor.copy(alpha = 0.9f),
+            baseColor.copy(alpha = 0.95f)
+        ),
+        start = Alignment.TopStart.let { androidx.compose.ui.geometry.Offset(0f, 0f) },
+        end = Alignment.BottomEnd.let { androidx.compose.ui.geometry.Offset(1000f, 1000f) }
     )
 
     Card(
         onClick = onOpen,
         modifier = modifier,
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        shape = RoundedCornerShape(topEnd = 16.dp, bottomEnd = 16.dp, topStart = 4.dp, bottomStart = 4.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+        elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
     ) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(gradient)
-                .padding(16.dp)
+                .background(coverBrush)
         ) {
+            // 바인딩 효과 (왼쪽 어두운 영역)
+            Box(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .width(20.dp)
+                    .background(Color.Black.copy(alpha = 0.2f))
+                    .align(Alignment.CenterStart)
+            )
+            
+            // 바인딩 선
             Column(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .width(20.dp)
+                    .padding(vertical = 12.dp),
+                verticalArrangement = Arrangement.SpaceEvenly,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                repeat(5) {
+                    Box(
+                        modifier = Modifier
+                            .size(4.dp, 24.dp)
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(Color.White.copy(alpha = 0.4f))
+                    )
+                }
+            }
+
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(start = 28.dp, top = 16.dp, end = 16.dp, bottom = 16.dp),
                 verticalArrangement = Arrangement.SpaceBetween,
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.Top,
+                    horizontalArrangement = Arrangement.End,
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(12.dp, 44.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(baseColor)
-                    )
                     IconButton(
                         onClick = { menuExpanded = true },
-                        modifier = Modifier.size(32.dp),
+                        modifier = Modifier
+                            .size(28.dp)
+                            .background(Color.Black.copy(alpha = 0.1f), CircleShape),
                     ) {
                         Icon(
                             imageVector = Icons.Default.MoreVert,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            tint = Color.White,
+                            modifier = Modifier.size(16.dp)
                         )
                     }
                     DropdownMenu(
@@ -578,22 +631,32 @@ private fun NotebookCard(
                         )
                     }
                 }
+                
                 Column {
-                    Text(
-                        text = notebook.title,
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = "페이지 ${notebook.pageCount}장",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    // 제목 영역 배경 (가독성 확보)
+                    Surface(
+                        color = Color.White.copy(alpha = 0.9f),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text(
+                                text = notebook.title,
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                color = Color.Black,
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "페이지 ${notebook.pageCount}장",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.Gray,
+                            )
+                        }
+                    }
+
                     if (notebook.tags.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(8.dp))
                         Row(
                             modifier = Modifier.horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -612,14 +675,14 @@ private fun NotebookCard(
 @Composable
 private fun TagChip(label: String) {
     Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+        shape = RoundedCornerShape(8.dp),
+        color = Color.White.copy(alpha = 0.25f),
     ) {
         Text(
-            text = label,
+            text = "#$label",
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+            color = Color.White,
         )
     }
 }
